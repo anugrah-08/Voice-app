@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { VoiceRecorder } from "@/components/voice-recorder"
 import { TextToSpeech } from "@/components/text-to-speech"
 import { TranscriptHistory } from "@/components/transcript-history"
+import { ApiKeyStatus } from "@/components/api-key-status"
 
 export type Activity = {
   id: string
@@ -63,10 +64,10 @@ export default function Home() {
       <div className="container mx-auto px-4 py-8 max-w-6xl">
         <header className="mb-12 text-center">
           <h1 className="text-4xl font-bold tracking-tight mb-3 text-balance">Voice AI Studio</h1>
-          <p className="text-muted-foreground text-lg">
-            Transform speech to text and text to speech - completely free!
-          </p>
+          <p className="text-muted-foreground text-lg">Transform speech to text and text to speech with AI</p>
         </header>
+
+        <ApiKeyStatus />
 
         <div className="grid gap-6 lg:grid-cols-2 mb-6">
           <VoiceRecorder onTranscriptComplete={handleTranscriptComplete} />

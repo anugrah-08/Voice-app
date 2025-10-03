@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Mic, Square } from "lucide-react"
@@ -13,118 +13,110 @@ interface VoiceRecorderProps {
 export function VoiceRecorder({ onTranscriptComplete }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [transcript, setTranscript] = useState("")
-  const [isSupported, setIsSupported] = useState(true)
-  const recognitionRef = useRef<any>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
   const { toast } = useToast()
 
-  useEffect(() => {
-    // Check if browser supports Web Speech API
-    if (typeof window !== "undefined") {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-      if (!SpeechRecognition) {
-        setIsSupported(false)
-        return
-      }
-
-      const recognition = new SpeechRecognition()
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.lang = "en-US"
-
-      recognition.onresult = (event: any) => {
-        let finalTranscript = ""
-        let interimTranscript = ""
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + " "
-          } else {
-            interimTranscript += transcript
-          }
-        }
-
-        setTranscript((prev) => prev + finalTranscript)
-      }
-
-      recognition.onerror = (event: any) => {
-        console.error("[v0] Speech recognition error:", event.error)
-        setIsRecording(false)
-        toast({
-          title: "Error",
-          description: `Speech recognition error: ${event.error}`,
-          variant: "destructive",
-        })
-      }
-
-      recognition.onend = () => {
-        setIsRecording(false)
-      }
-
-      recognitionRef.current = recognition
-    }
-  }, [toast])
-
-  const startRecording = () => {
-    if (!recognitionRef.current) return
-
+  const startRecording = async () => {
     try {
-      setTranscript("")
-      recognitionRef.current.start()
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm",
+      })
+
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" })
+        await transcribeAudio(audioBlob)
+
+        // Stop all tracks
+        stream.getTracks().forEach((track) => track.stop())
+      }
+
+      mediaRecorder.start()
       setIsRecording(true)
+      setTranscript("")
+
       toast({
         title: "Recording started",
         description: "Speak now...",
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error("[v0] Error starting recording:", error)
       toast({
         title: "Error",
-        description: "Failed to start recording. Please try again.",
+        description: error.message || "Failed to start recording. Please allow microphone access.",
         variant: "destructive",
       })
     }
   }
 
   const stopRecording = () => {
-    if (recognitionRef.current && isRecording) {
-      recognitionRef.current.stop()
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
       setIsRecording(false)
-
-      if (transcript.trim() && onTranscriptComplete) {
-        onTranscriptComplete(transcript.trim())
-      }
-
-      toast({
-        title: "Recording stopped",
-        description: "Transcription complete!",
-      })
     }
   }
 
-  if (!isSupported) {
-    return (
-      <Card className="bg-card border-border">
-        <CardHeader>
-          <CardTitle className="text-card-foreground">Speech to Text</CardTitle>
-          <CardDescription>Record your voice and convert it to text</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
-            <p className="text-destructive text-sm">
-              Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    )
+  const transcribeAudio = async (audioBlob: Blob) => {
+    setIsProcessing(true)
+
+    try {
+      const formData = new FormData()
+      formData.append("audio", audioBlob, "recording.webm")
+
+      console.log("[v0] Sending audio to AssemblyAI...")
+
+      const response = await fetch("/api/assemblyai/transcribe", {
+        method: "POST",
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || "Transcription failed")
+      }
+
+      console.log("[v0] Transcription received:", data.text)
+
+      setTranscript(data.text)
+
+      if (onTranscriptComplete) {
+        onTranscriptComplete(data.text)
+      }
+
+      toast({
+        title: "Transcription complete",
+        description: `Confidence: ${Math.round((data.confidence || 0) * 100)}%`,
+      })
+    } catch (error: any) {
+      console.error("[v0] Transcription error:", error)
+      toast({
+        title: "Transcription failed",
+        description: error.message || "Failed to transcribe audio. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsProcessing(false)
+    }
   }
 
   return (
     <Card className="bg-card border-border">
       <CardHeader>
         <CardTitle className="text-card-foreground">Speech to Text</CardTitle>
-        <CardDescription>Record your voice and convert it to text (no API key needed!)</CardDescription>
+        <CardDescription>Record your voice and convert it to text with AssemblyAI</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex justify-center">
@@ -132,6 +124,7 @@ export function VoiceRecorder({ onTranscriptComplete }: VoiceRecorderProps) {
             <Button
               size="lg"
               onClick={startRecording}
+              disabled={isProcessing}
               className="h-24 w-24 rounded-full bg-primary hover:bg-primary/90"
             >
               <Mic className="h-8 w-8" />
@@ -148,6 +141,15 @@ export function VoiceRecorder({ onTranscriptComplete }: VoiceRecorderProps) {
             <div className="inline-flex items-center gap-2 text-destructive">
               <div className="h-3 w-3 rounded-full bg-destructive animate-pulse" />
               <span className="font-medium">Recording...</span>
+            </div>
+          </div>
+        )}
+
+        {isProcessing && (
+          <div className="text-center">
+            <div className="inline-flex items-center gap-2 text-primary">
+              <div className="h-3 w-3 rounded-full bg-primary animate-pulse" />
+              <span className="font-medium">Transcribing with AssemblyAI...</span>
             </div>
           </div>
         )}
