@@ -117,3 +117,7 @@ Requires a modern browser with:
 
 - **AssemblyAI**: Speech-to-text transcription with industry-leading accuracy
 - **ElevenLabs**: Natural AI voice generation with realistic intonation and emotion
+
+## Live Link
+
+- https://v0-mern-voice-app.vercel.app/
