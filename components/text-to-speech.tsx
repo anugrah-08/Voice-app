@@ -16,6 +16,8 @@ export function TextToSpeech({ onSpeechGenerated }: TextToSpeechProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isSupported, setIsSupported] = useState(true)
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const [voicesLoaded, setVoicesLoaded] = useState(false)
+  const preferredVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
   const { toast } = useToast()
 
   useEffect(() => {
@@ -28,6 +30,39 @@ export function TextToSpeech({ onSpeechGenerated }: TextToSpeechProps) {
       })
     }
   }, [toast])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!window.speechSynthesis) return
+
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices()
+      if (voices && voices.length > 0) {
+        // Prefer high‑quality English voices if available
+        const preferred =
+          voices.find(
+            (v) =>
+              v.lang?.toLowerCase().startsWith("en") && (v.name.includes("Google") || v.name.includes("Microsoft")),
+          ) ||
+          voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ||
+          voices[0]
+
+        preferredVoiceRef.current = preferred || null
+        setVoicesLoaded(true)
+        console.log("[v0] Voices loaded:", voices.length, "Preferred:", preferred?.name)
+      }
+    }
+
+    // Attempt immediate load, then fall back with small delay, and listen for dynamic load
+    loadVoices()
+    const t = setTimeout(loadVoices, 250)
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices)
+
+    return () => {
+      clearTimeout(t)
+      window.speechSynthesis.removeEventListener("voiceschanged", loadVoices)
+    }
+  }, [])
 
   const generateSpeech = () => {
     if (!text.trim()) {
@@ -51,8 +86,9 @@ export function TextToSpeech({ onSpeechGenerated }: TextToSpeechProps) {
     try {
       console.log("[v0] Generating speech with Web Speech API...")
 
-      // Stop any currently playing speech
-      if (utteranceRef.current) {
+      // Only cancel if something is in progress to avoid spurious onerror events
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        console.log("[v0] Canceling current speech before starting new one")
         window.speechSynthesis.cancel()
       }
 
@@ -63,22 +99,16 @@ export function TextToSpeech({ onSpeechGenerated }: TextToSpeechProps) {
       utterance.rate = 1.0
       utterance.pitch = 1.0
       utterance.volume = 1.0
-
-      // Try to use a high-quality voice if available
-      const voices = window.speechSynthesis.getVoices()
-      const preferredVoice = voices.find(
-        (voice) => voice.lang.startsWith("en") && (voice.name.includes("Google") || voice.name.includes("Microsoft")),
-      )
-      if (preferredVoice) {
-        utterance.voice = preferredVoice
+      // Default to English; if we have a preferred voice, apply it and inherit its lang
+      utterance.lang = preferredVoiceRef.current?.lang || "en-US"
+      if (voicesLoaded && preferredVoiceRef.current) {
+        utterance.voice = preferredVoiceRef.current
       }
 
       utterance.onstart = () => {
         console.log("[v0] Speech started")
         setIsPlaying(true)
-        if (onSpeechGenerated) {
-          onSpeechGenerated(text.trim())
-        }
+        onSpeechGenerated?.(text.trim())
       }
 
       utterance.onend = () => {
@@ -86,11 +116,31 @@ export function TextToSpeech({ onSpeechGenerated }: TextToSpeechProps) {
         setIsPlaying(false)
       }
 
-      utterance.onerror = (event) => {
-        console.error("[v0] Speech error:", event)
+      utterance.onerror = (event: any) => {
+        // Some browsers fire onerror for cancellations/interruption or before voices load.
+        const errType = (event?.error as string) || ""
+        console.warn("[v0] Speech onerror:", errType || event)
+
+        // Ignore benign error types that occur during normal operation
+        if (errType === "canceled" || errType === "interrupted" || errType === "not-allowed") {
+          setIsPlaying(false)
+          return
+        }
+
+        // If voices might not be ready, advise retry
+        if (!voicesLoaded) {
+          setIsPlaying(false)
+          toast({
+            title: "Voice not ready",
+            description: "Voices are still loading. Please try again in a moment.",
+            variant: "destructive",
+          })
+          return
+        }
+
         setIsPlaying(false)
         toast({
-          title: "Error",
+          title: "Speech error",
           description: "Failed to generate speech. Please try again.",
           variant: "destructive",
         })
@@ -100,22 +150,27 @@ export function TextToSpeech({ onSpeechGenerated }: TextToSpeechProps) {
 
       toast({
         title: "Playing speech",
-        description: "Using browser's text-to-speech engine",
+        description: preferredVoiceRef.current
+          ? `Using ${preferredVoiceRef.current.name}`
+          : "Using browser's default voice",
       })
     } catch (error: any) {
       console.error("[v0] Text-to-speech error:", error)
       toast({
         title: "Generation failed",
-        description: error.message || "Failed to generate speech. Please try again.",
+        description: error?.message || "Failed to generate speech. Please try again.",
         variant: "destructive",
       })
+      setIsPlaying(false)
     }
   }
 
   const stopSpeech = () => {
     if (utteranceRef.current) {
+      console.log("[v0] Stopping speech")
       window.speechSynthesis.cancel()
       setIsPlaying(false)
+      utteranceRef.current = null
     }
   }
 
